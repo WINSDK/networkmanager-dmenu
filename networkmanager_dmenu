@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # encoding:utf8
-"""NetworkManager command line dmenu script.
+"""NetworkManager command line rofi script.
 
 To add new connections or enable/disable networking requires policykit
 permissions setup per:
@@ -8,16 +8,14 @@ https://wiki.archlinux.org/index.php/NetworkManager#Set_up_PolicyKit_permissions
 
 OR running the script as root
 
-Add dmenu options and default terminal if desired to
+Add rofi options and default terminal if desired to
 ~/.config/networkmanager-dmenu/config.ini
 
 """
 import pathlib
 import struct
-import configparser
 import locale
 import os
-from os.path import expanduser
 import shlex
 from shutil import which
 import sys
@@ -36,85 +34,36 @@ CLIENT = NM.Client.new(None)
 LOOP = GLib.MainLoop()
 CONNS = CLIENT.get_connections()
 
-CONF = configparser.ConfigParser()
-CONF.read(expanduser("~/.config/networkmanager-dmenu/config.ini"))
+HIGHLIGHT = True
+OBSCURE = True
+COMPACT = False
+LIST_SAVED = True
+TERM = "kitty"
 
 
-def cli_args():
-    """ Don't override dmenu_cmd function arguments with CLI args. Removes -l
-    and -p if those are passed on the command line.
-
-    Exception: if -l is passed and dmenu_command is not defined, assume that the
-    user wants to switch dmenu to the vertical layout and include -l.
-
-        Returns: List of additional CLI arguments
-
-    """
-    args = sys.argv[1:]
-    cmd = CONF.get('dmenu', 'dmenu_command', fallback=False)
-    if "-l" in args or "-p" in args:
-        for nope in ['-l', '-p'] if cmd is not False else ['-p']:
-            try:
-                nope_idx = args.index(nope)
-                del args[nope_idx]
-                del args[nope_idx]
-            except ValueError:
-                pass
-    return args
-
-
-def dmenu_pass(command, color):
-    """Check if dmenu passphrase patch is applied and return the correct command
-    line arg list
-
-    Args: command - string
-          color - obscure color string
-    Returns: list or None
-
-    """
-    if command != 'dmenu':
-        return None
-    try:
-        # Check for dmenu password patch
-        dm_patch = b'P' in subprocess.run(["dmenu", "-h"],
-                                          capture_output=True,
-                                          check=False).stderr
-    except FileNotFoundError:
-        dm_patch = False
-    return ["-P"] if dm_patch else ["-nb", color, "-nf", color]
-
-
-def dmenu_cmd(num_lines, prompt="Networks", active_lines=None):
+def parse_cmd(num_lines, prompt="Networks", active_lines=None):
     """Parse config.ini for menu options
 
     Args: args - num_lines: number of lines to display
                  prompt: prompt to show
                  active_lines: list of line numbers to tag as active
     Returns: command invocation (as a list of strings) for example
-                ["dmenu", "-l", "<num_lines>", "-p", "<prompt>", "-i"]
+                ["rofi", "-l", "<num_lines>", "-p", "<prompt>", "-i"]
 
     """
     # Create command string
-    commands = {"dmenu": ["-p", str(prompt)],
-                "rofi": ["-dmenu", "-p", str(prompt), "-l", str(num_lines)],
-                "bemenu": ["-p", str(prompt)],
-                "wofi": ["-p", str(prompt)]}
-    command = shlex.split(CONF.get('dmenu', 'dmenu_command', fallback="dmenu"))
-    command.extend(cli_args())
-    command.extend(commands.get(command[0], []))
+    command = shlex.split("rofi -show run -theme gruvbox-dark -dpi 180")
+    command.extend(["-dmenu", "-p", str(prompt), "-l", str(num_lines)])
+
     # Rofi Highlighting
-    rofi_highlight = CONF.getboolean('dmenu', 'rofi_highlight', fallback=False)
-    if rofi_highlight is True and command[0] == "rofi" and active_lines:
+    if HIGHLIGHT is True and active_lines:
         command.extend(["-a", ",".join([str(num) for num in active_lines])])
+
     # Passphrase prompts
-    obscure = CONF.getboolean('dmenu_passphrase', 'obscure', fallback=False)
-    if prompt == "Passphrase" and obscure is True:
-        obscure_color = CONF.get('dmenu_passphrase', 'obscure_color', fallback='#222222')
-        pass_prompts = {"dmenu": dmenu_pass(command[0], obscure_color),
-                        "rofi": ['-password'],
-                        "bemenu": ['-x'],
-                        "wofi": ['-P']}
-        command.extend(pass_prompts.get(command[0], []))
+    if prompt == "Passphrase" and OBSCURE is True:
+        command.extend(["-password"])
+    print(command)
+
     return command
 
 
@@ -129,7 +78,7 @@ def choose_adapter(client):
     if len(devices) == 1:
         return devices[0]
     device_names = "\n".join([d.get_iface() for d in devices])
-    sel = subprocess.run(dmenu_cmd(len(devices), "CHOOSE ADAPTER:"),
+    sel = subprocess.run(parse_cmd(len(devices), "CHOOSE ADAPTER:"),
                          capture_output=True,
                          check=False,
                          env=ENV,
@@ -193,7 +142,7 @@ def rescan_wifi():
     for dev in CLIENT.get_devices():
         if gi.repository.NM.DeviceWifi == type(dev):
             try:
-                dev.request_scan_async(None, rescan_cb, None)
+                dev.request_scan_async(None, rescan_cb)
                 LOOP.run()
             except gi.repository.GLib.Error as err:
                 # Too frequent rescan error
@@ -202,7 +151,7 @@ def rescan_wifi():
                     raise err
 
 
-def rescan_cb(dev, res, data):
+def rescan_cb(dev, res):
     """Callback for rescan_wifi. Just for notifications
 
     """
@@ -384,12 +333,9 @@ def create_ap_actions(aps, active_ap, active_connection, adapter):  # noqa pylin
 
     for nm_ap, name, sec in zip(aps, names, secs):
         bars = NM.utils_wifi_strength_bars(nm_ap.get_strength())
-        wifi_chars = CONF.get("dmenu", "wifi_chars", fallback=False)
-        if wifi_chars:
-            bars = "".join([wifi_chars[i] for i, j in enumerate(bars) if j == '*'])
         is_active = nm_ap.get_bssid() == active_ap_bssid
-        compact = CONF.getboolean("dmenu", "compact", fallback=False)
-        if compact:
+
+        if COMPACT:
             action_name = f"{name}  {sec}  {bars}"
         else:
             action_name = f"{name:<{max_len_name}s}  {sec:<{max_len_sec}s} {bars:>4}"
@@ -498,8 +444,7 @@ def combine_actions(eths, aps, vpns, wgs, gsms, blues, wwan, others, saved):
                  wwan: list of Actions
                  others: list of Actions
     """
-    compact = CONF.getboolean("dmenu", "compact", fallback=False)
-    empty_action = [Action('', None)] if not compact else []
+    empty_action = [Action('', None)] if not COMPACT else []
     all_actions = []
     all_actions += eths + empty_action if eths else []
     all_actions += aps + empty_action if aps else []
@@ -514,11 +459,10 @@ def combine_actions(eths, aps, vpns, wgs, gsms, blues, wwan, others, saved):
 
 
 def get_selection(all_actions):
-    """Spawn dmenu for selection and execute the associated action."""
-    rofi_highlight = CONF.getboolean('dmenu', 'rofi_highlight', fallback=False)
+    """Spawn rofi for selection and execute the associated action."""
     inp = []
 
-    if rofi_highlight is True:
+    if HIGHLIGHT is True:
         inp = [str(action) for action in all_actions]
     else:
         inp = [('== ' if action.is_active else '   ') + str(action)
@@ -526,7 +470,7 @@ def get_selection(all_actions):
     active_lines = [index for index, action in enumerate(all_actions)
                     if action.is_active]
 
-    command = dmenu_cmd(len(inp), active_lines=active_lines)
+    command = parse_cmd(len(inp), active_lines=active_lines)
     sel = subprocess.run(command,
                          capture_output=True,
                          check=False,
@@ -537,7 +481,7 @@ def get_selection(all_actions):
     if not sel.rstrip():
         sys.exit()
 
-    if rofi_highlight is False:
+    if HIGHLIGHT is False:
         action = [i for i in all_actions
                   if ((str(i).strip() == str(sel.strip())
                        and not i.is_active) or
@@ -632,17 +576,10 @@ def launch_connection_editor():
     """Launch nmtui or the gui nm-connection-editor
 
     """
-    terminal = CONF.get("editor", "terminal", fallback="xterm")
-    gui_if_available = CONF.getboolean("editor", "gui_if_available", fallback=True)
-    guis = ["gnome-continue-center", "nm-connection-editor"]
-    if gui_if_available is True:
-        for gui in guis:
-            if is_installed(gui):
-                subprocess.run(gui, check=False)
-                return
     if is_installed("nmtui"):
-        subprocess.run([terminal, "-e", "nmtui"], check=False)
+        subprocess.run([TERM, "-e", "nmtui"], check=False)
         return
+
     notify("No network connection editor installed", urgency="critical")
 
 
@@ -650,22 +587,8 @@ def get_passphrase():
     """Get a password
 
     Returns: string
-
     """
-    pinentry = CONF.get("dmenu", "pinentry", fallback=None)
-    if pinentry:
-        pin = ""
-        out = subprocess.run(pinentry,
-                             capture_output=True,
-                             check=False,
-                             encoding=ENC,
-                             input='setdesc Get network password\ngetpin\n').stdout
-        if out:
-            res = out.split("\n")[2]
-            if res.startswith("D "):
-                pin = res.split("D ")[1]
-        return pin
-    return subprocess.run(dmenu_cmd(0, "Passphrase"),
+    return subprocess.run(parse_cmd(0, "Passphrase") + ["-password"],
                           capture_output=True,
                           check=False,
                           encoding=ENC).stdout
@@ -675,9 +598,9 @@ def delete_connection():
     """Display list of NM connections and delete the selected one
 
     """
-    conn_acts = [Action(i.get_id(), i.delete_async, args=[None, delete_cb, None]) for i in CONNS]
+    conn_acts = [Action(i.get_id(), i.delete_async, args=[None, delete_cb]) for i in CONNS]
     conn_names = "\n".join([str(i) for i in conn_acts])
-    sel = subprocess.run(dmenu_cmd(len(conn_acts), "CHOOSE CONNECTION TO DELETE:"),
+    sel = subprocess.run(parse_cmd(len(conn_acts), "CHOOSE CONNECTION TO DELETE:"),
                          capture_output=True,
                          check=False,
                          input=conn_names,
@@ -691,7 +614,7 @@ def delete_connection():
     LOOP.run()
 
 
-def delete_cb(dev, res, data):
+def delete_cb(dev, res):
     """Notification if delete completed successfully
 
     """
@@ -771,9 +694,10 @@ def verify_conn(client, result, data):
     is an error.
 
     """
+    act_conn = client.add_and_activate_connection_finish(result)
+    conn = act_conn.get_connection()
+
     try:
-        act_conn = client.add_and_activate_connection_finish(result)
-        conn = act_conn.get_connection()
         if not all([conn.verify(),
                     conn.verify_secrets(),
                     data.verify(),
@@ -877,9 +801,8 @@ def run():  # pylint: disable=too-many-locals
         gsm_actions = []
         wwan_actions = []
 
-    list_saved = CONF.getboolean('dmenu', 'list_saved', fallback=False)
     saved_cons = [i for i in CONNS if i not in vpns + wgs + eths + blues]
-    if list_saved:
+    if LIST_SAVED:
         saved_actions = create_saved_actions(saved_cons)
     else:
         saved_actions = [Action("Saved connections", prompt_saved, [saved_cons])]
