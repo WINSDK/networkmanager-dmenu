@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# TODO: !!! ADD FUZZY SEARCH
+
 # encoding:utf8
 """NetworkManager command line rofi script.
 
@@ -128,8 +131,9 @@ def create_other_actions(client):
     if bluetooth_enabled is not None:
         actions.append(Action(f"{bluetooth_action} Bluetooth",
                               toggle_bluetooth, not bluetooth_enabled))
-    actions += [Action("Launch Connection Manager", launch_connection_editor),
-                Action("Delete a Connection", delete_connection)]
+
+    actions.append(Action("Delete a Connection", delete_connection))
+
     if wifi_enabled:
         actions.append(Action("Rescan Wifi Networks", rescan_wifi))
     return actions
@@ -570,17 +574,6 @@ def toggle_bluetooth(enable):
                urgency="critical")
     else:
         notify(f"Bluetooth {'enabled' if enable else 'disabled'}")
-
-
-def launch_connection_editor():
-    """Launch nmtui or the gui nm-connection-editor
-
-    """
-    if is_installed("nmtui"):
-        subprocess.run([TERM, "-e", "nmtui"], check=False)
-        return
-
-    notify("No network connection editor installed", urgency="critical")
 
 
 def get_passphrase():
